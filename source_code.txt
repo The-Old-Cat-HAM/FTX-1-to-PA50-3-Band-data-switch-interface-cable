@@ -1,0 +1,105 @@
+/*
+  FTX-1 BAND DATA A/B/C/D -> Yaesu band-voltage via PWM+RC
+  Digispark ATtiny85
+
+  Inputs:
+    P0 = A
+    P5 = B
+    P2 = C
+    P3 = D
+  Output:
+    P1 = PWM -> RC -> PA50 band-voltage input
+*/
+
+#define PIN_A   0
+#define PIN_B   4
+#define PIN_C   2
+#define PIN_D   3
+#define PIN_PWM 1
+
+static uint8_t lastPwm = 0;
+
+static inline uint8_t VtoPWM(float v) {
+  int x = (int)(v * 255.0f / 5.0f + 0.5f);
+  if (x < 0) x = 0;
+  if (x > 255) x = 255;
+  return (uint8_t)x;
+}
+
+static inline uint8_t readBitStable(uint8_t pin) {
+  const uint8_t N = 9;
+  uint8_t ones = 0;
+  for (uint8_t i = 0; i < N; i++) {
+    if (digitalRead(pin) == HIGH) ones++;
+    delayMicroseconds(80);
+  }
+  return (ones >= (N/2 + 1)) ? 1 : 0;
+}
+
+static inline uint8_t readCodeStable() {
+  uint8_t A = readBitStable(PIN_A);
+  uint8_t B = readBitStable(PIN_B);
+  uint8_t C = readBitStable(PIN_C);
+  uint8_t D = readBitStable(PIN_D);
+  return (A << 3) | (B << 2) | (C << 1) | D;
+}
+
+static inline uint8_t readCodeLocked() {
+  uint8_t c1 = readCodeStable();
+  delay(2);
+  uint8_t c2 = readCodeStable();
+  return (c1 == c2) ? c1 : c2;
+}
+
+static uint8_t codeToPwm(uint8_t code) {
+  switch (code) {
+    case 0b1000: return VtoPWM(0.33f);
+    case 0b0100: return VtoPWM(0.67f);
+    case 0b1100: return VtoPWM(1.00f);
+    case 0b0010: return VtoPWM(1.33f); // 10 MHz = 0010
+    case 0b1010: return VtoPWM(1.67f);
+    case 0b0110: return VtoPWM(2.00f);
+    case 0b1110: return VtoPWM(2.33f);
+    case 0b0001: return VtoPWM(2.67f);
+    case 0b1001: return VtoPWM(3.00f);
+    case 0b0101: return VtoPWM(3.33f);
+    default:     return lastPwm;
+  }
+}
+
+void setup() {
+  pinMode(PIN_A, INPUT);
+  pinMode(PIN_B, INPUT);
+  pinMode(PIN_C, INPUT);
+  pinMode(PIN_D, INPUT);
+
+  pinMode(PIN_PWM, OUTPUT);
+  lastPwm = 0;
+  analogWrite(PIN_PWM, lastPwm);
+}
+
+void loop() {
+  static uint8_t candidateCode = 0;
+  static uint8_t appliedCode   = 0;
+  static uint32_t t0 = 0;
+
+  uint8_t code = readCodeLocked();
+
+  if (code != candidateCode) {
+    candidateCode = code;
+    t0 = millis();
+  }
+
+  if (candidateCode != appliedCode && (millis() - t0) >= 100) {
+    appliedCode = candidateCode;
+
+    uint8_t pwm  = codeToPwm(appliedCode);
+
+    if (pwm != lastPwm) {
+      lastPwm = pwm;
+      analogWrite(PIN_PWM, pwm);
+    }
+  }
+
+  delay(20);
+}
